@@ -116,7 +116,7 @@ export default function LoginPage() {
           <div className="flex items-center justify-center mb-2">
             <MessageCircle className="h-10 w-10 text-primary" />
           </div>
-          <CardTitle className="text-2xl text-center">Chat App</CardTitle>
+          <CardTitle className="text-2xl text-center">Ping</CardTitle>
           <CardDescription className="text-center">Sign in or create an account to start chatting</CardDescription>
         </CardHeader>
         <CardContent>
