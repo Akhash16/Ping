@@ -3,7 +3,7 @@
 import type React from "react"
 
 import { createContext, useContext, useEffect, useState } from "react"
-import { initializeApp } from "firebase/app"
+import { initializeApp, getApps } from "firebase/app"
 import {
   getAuth,
   signInWithEmailAndPassword,
@@ -33,8 +33,8 @@ const createFirebaseClient = () => {
   }
 
   try {
-    // Initialize Firebase
-    const app = initializeApp(firebaseConfig)
+    // Initialize Firebase (only if not already initialized)
+    const app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApps()[0]
     const auth = getAuth(app)
     const db = getFirestore(app)
 
@@ -53,6 +53,7 @@ interface FirebaseContextType {
   signUp: (email: string, password: string) => Promise<void>
   signOut: () => Promise<void>
   db: any
+  isAuthenticated: boolean
 }
 
 const FirebaseContext = createContext<FirebaseContextType | undefined>(undefined)
@@ -61,6 +62,7 @@ const FirebaseContext = createContext<FirebaseContextType | undefined>(undefined
 export function FirebaseProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null)
   const [loading, setLoading] = useState(true)
+  const [isAuthenticated, setIsAuthenticated] = useState(false)
   const { auth, db } = createFirebaseClient()
   const router = useRouter()
 
@@ -75,16 +77,8 @@ export function FirebaseProvider({ children }: { children: React.ReactNode }) {
       auth,
       (user) => {
         setUser(user)
+        setIsAuthenticated(!!user)
         setLoading(false)
-
-        // We'll handle navigation based on auth state instead of using cookies
-        if (user) {
-          // User is signed in, we can navigate to chat if needed
-          // We'll let the page components handle this
-        } else {
-          // User is signed out, we can navigate to home if needed
-          // We'll let the page components handle this
-        }
       },
       (error) => {
         console.error("Auth state change error:", error)
@@ -93,7 +87,7 @@ export function FirebaseProvider({ children }: { children: React.ReactNode }) {
     )
 
     return () => unsubscribe()
-  }, [auth, router])
+  }, [auth])
 
   const signIn = async (email: string, password: string) => {
     if (!auth) throw new Error("Auth is not initialized")
@@ -125,6 +119,7 @@ export function FirebaseProvider({ children }: { children: React.ReactNode }) {
         signUp,
         signOut,
         db,
+        isAuthenticated,
       }}
     >
       {children}

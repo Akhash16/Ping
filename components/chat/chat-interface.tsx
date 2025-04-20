@@ -7,10 +7,11 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { useToast } from "@/hooks/use-toast"
 import { useFirebase } from "@/lib/firebase/firebase-provider"
-import { MessageSquare, Send, LogOut, User, Users } from "lucide-react"
+import { MessageSquare, Send, LogOut, User, Users, AlertCircle } from "lucide-react"
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"
 import { Separator } from "@/components/ui/separator"
 import { ScrollArea } from "@/components/ui/scroll-area"
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { cn } from "@/lib/utils"
 import {
   collection,
@@ -45,19 +46,34 @@ export default function ChatInterface() {
   const [users, setUsers] = useState<ChatUser[]>([])
   const [selectedUser, setSelectedUser] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+  const [debugInfo, setDebugInfo] = useState<string | null>(null)
   const messagesEndRef = useRef<HTMLDivElement>(null)
+  // Reference to store active Firestore unsubscribe functions
+  const unsubscribeRefs = useRef<(() => void)[]>([]);
   const { toast } = useToast()
-  const { user, signOut, db } = useFirebase()
+  const { user, signOut, db, isAuthenticated } = useFirebase()
+
+  // Ensure user is authenticated before fetching data
+  useEffect(() => {
+    if (!isAuthenticated || !user) {
+      setError("You must be logged in to use the chat")
+      setLoading(false)
+      return
+    } else {
+      setError(null)
+    }
+  }, [isAuthenticated, user])
 
   // Fetch users
   useEffect(() => {
-    if (!user || !db) {
+    if (!user || !db || !isAuthenticated) {
       return
     }
 
     const fetchUsers = async () => {
       try {
-        // Add current user to users collection
+        // First, ensure current user exists in the users collection
         const userRef = doc(db, "users", user.uid)
         await setDoc(
           userRef,
@@ -69,7 +85,7 @@ export default function ChatInterface() {
           { merge: true },
         )
 
-        // Listen for users
+        // Then listen for users
         const usersCollection = collection(db, "users")
         const unsubscribe = onSnapshot(
           usersCollection,
@@ -96,6 +112,7 @@ export default function ChatInterface() {
           },
           (error) => {
             console.error("Error fetching users:", error)
+            setError(`Failed to load users: ${error.message}`)
             toast({
               title: "Error",
               description: "Failed to load users: " + error.message,
@@ -105,9 +122,13 @@ export default function ChatInterface() {
           },
         )
 
+        // Store the unsubscribe function
+        unsubscribeRefs.current.push(unsubscribe);
+        
         return unsubscribe
       } catch (error: any) {
         console.error("Error setting up users:", error)
+        setError(`Failed to set up users: ${error.message}`)
         toast({
           title: "Error",
           description: "Failed to set up users: " + error.message,
@@ -118,28 +139,55 @@ export default function ChatInterface() {
       }
     }
 
-    fetchUsers()
-  }, [user, db, toast, selectedUser])
+    const unsubscribePromise = fetchUsers();
+    
+    return () => {
+      unsubscribePromise.then(unsubscribe => {
+        if (unsubscribe) unsubscribe();
+      });
+    }
+  }, [user, db, toast, isAuthenticated])
 
   // Fetch messages
   useEffect(() => {
-    if (!selectedUser || !user || !db) return
+    if (!selectedUser || !user || !db || !isAuthenticated) return
+
+    // Clear existing messages when switching users
+    setMessages([]);
 
     const fetchMessages = async () => {
       try {
         // Create a chat ID that's the same regardless of who initiated the chat
         const chatId = [user.uid, selectedUser].sort().join("_")
 
+        // Debug info
+        setDebugInfo(`Current chat ID: ${chatId}, Current user: ${user.uid}, Selected user: ${selectedUser}`)
+        console.log(`Current chat ID: ${chatId}, Current user: ${user.uid}, Selected user: ${selectedUser}`)
+
         // Create or update the chat document
         const chatRef = doc(db, "chats", chatId)
-        await setDoc(
-          chatRef,
-          {
+
+        // Check if the chat document exists
+        const chatDoc = await getDoc(chatRef)
+
+        // Create the chat document if it doesn't exist
+        if (!chatDoc.exists()) {
+          await setDoc(chatRef, {
             participants: [user.uid, selectedUser],
+            createdAt: serverTimestamp(),
             updatedAt: serverTimestamp(),
-          },
-          { merge: true },
-        )
+          })
+        } else {
+          // Update the chat document if it exists
+          await setDoc(
+            chatRef,
+            {
+              participants: [user.uid, selectedUser],
+              updatedAt: serverTimestamp(),
+            },
+            { merge: true },
+          )
+        }
 
         // Listen for messages
         const messagesRef = collection(db, "chats", chatId, "messages")
@@ -188,6 +236,7 @@ export default function ChatInterface() {
           },
           (error) => {
             console.error("Error fetching messages:", error)
+            setError(`Failed to load messages: ${error.message}`)
             toast({
               title: "Error",
               description: "Failed to load messages: " + error.message,
@@ -196,9 +245,13 @@ export default function ChatInterface() {
           },
         )
 
+        // Store the unsubscribe function
+        unsubscribeRefs.current.push(unsubscribe);
+        
         return unsubscribe
       } catch (error: any) {
         console.error("Error setting up messages:", error)
+        setError(`Failed to set up messages: ${error.message}`)
         toast({
           title: "Error",
           description: "Failed to set up messages: " + error.message,
@@ -209,16 +262,21 @@ export default function ChatInterface() {
     }
 
     const unsubscribePromise = fetchMessages()
+    
     return () => {
       unsubscribePromise
         .then((unsubscribe) => {
-          if (unsubscribe) unsubscribe()
+          if (unsubscribe) {
+            // Store the unsubscribe function
+            unsubscribeRefs.current.push(unsubscribe);
+            unsubscribe();
+          }
         })
         .catch((error) => {
           console.error("Error cleaning up message subscription:", error)
         })
     }
-  }, [selectedUser, user, db, toast])
+  }, [selectedUser, user, db, toast, isAuthenticated])
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" })
@@ -227,21 +285,35 @@ export default function ChatInterface() {
   const handleSendMessage = async (e: React.FormEvent) => {
     e.preventDefault()
 
-    if (!message.trim() || !selectedUser || !user || !db) return
+    if (!message.trim() || !selectedUser || !user || !db || !isAuthenticated) return
 
     try {
       const chatId = [user.uid, selectedUser].sort().join("_")
 
       // Update the chat document
       const chatRef = doc(db, "chats", chatId)
-      await setDoc(
-        chatRef,
-        {
+
+      // Check if the chat document exists
+      const chatDoc = await getDoc(chatRef)
+
+      // Create the chat document if it doesn't exist
+      if (!chatDoc.exists()) {
+        await setDoc(chatRef, {
           participants: [user.uid, selectedUser],
+          createdAt: serverTimestamp(),
           updatedAt: serverTimestamp(),
-        },
-        { merge: true },
-      )
+        })
+      } else {
+        // Update the chat document if it exists
+        await setDoc(
+          chatRef,
+          {
+            participants: [user.uid, selectedUser],
+            updatedAt: serverTimestamp(),
+          },
+          { merge: true },
+        )
+      }
 
       // Add the message
       const messagesRef = collection(db, "chats", chatId, "messages")
@@ -264,6 +336,21 @@ export default function ChatInterface() {
 
   const handleSignOut = async () => {
     try {
+      // Clean up all listeners before signing out
+      unsubscribeRefs.current.forEach(unsubscribe => {
+        if (typeof unsubscribe === 'function') {
+          try {
+            unsubscribe();
+          } catch (e) {
+            console.warn("Error unsubscribing:", e);
+          }
+        }
+      });
+      
+      // Clear the unsubscribe references
+      unsubscribeRefs.current = [];
+      
+      // Sign out
       await signOut()
     } catch (error: any) {
       console.error("Sign out error:", error)
@@ -284,6 +371,21 @@ export default function ChatInterface() {
   const getInitials = (name: string) => {
     if (!name) return "?"
     return name.substring(0, 2).toUpperCase()
+  }
+
+  if (error) {
+    return (
+      <div className="flex h-screen items-center justify-center bg-background p-4">
+        <Alert variant="destructive" className="max-w-md">
+          <AlertCircle className="h-4 w-4" />
+          <AlertTitle>Error</AlertTitle>
+          <AlertDescription>{error}</AlertDescription>
+          <Button className="mt-4 w-full" onClick={handleSignOut}>
+            Sign Out and Try Again
+          </Button>
+        </Alert>
+      </div>
+    )
   }
 
   if (loading) {
@@ -326,6 +428,12 @@ export default function ChatInterface() {
             <p className="text-xs text-muted-foreground">{user?.email}</p>
           </div>
         </div>
+
+        {debugInfo && (
+          <div className="mb-2 p-2 bg-muted rounded text-xs overflow-auto">
+            <p className="font-mono">{debugInfo}</p>
+          </div>
+        )}
 
         <Separator className="my-2" />
 

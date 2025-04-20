@@ -7,7 +7,7 @@ import { useFirebase } from "@/lib/firebase/firebase-provider"
 import Loading from "./loading"
 
 export default function Home() {
-  const { user, loading } = useFirebase()
+  const { user, loading, isAuthenticated } = useFirebase()
   const router = useRouter()
   const [isClient, setIsClient] = useState(false)
 
@@ -15,10 +15,10 @@ export default function Home() {
     setIsClient(true)
 
     // If user is logged in, redirect to chat
-    if (isClient && user && !loading) {
+    if (isClient && isAuthenticated && !loading) {
       router.push("/chat")
     }
-  }, [user, loading, router, isClient])
+  }, [isAuthenticated, loading, router, isClient])
 
   // Show loading state while checking auth
   if (loading || !isClient) {
